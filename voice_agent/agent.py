@@ -15,14 +15,14 @@ EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # Load Chroma
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
-collection = chroma_client.get_collection("docs")
+chroma_client = chromadb.PersistentClient(path="./rag/vectordb")
+collection = chroma_client.get_collection("fastapi_docs")
 
 # Load BM25
 with open("rag/bm25_index.pkl", "rb") as f:
     bm25_data = pickle.load(f)
 
-def retrieve(query, top_k=4):
+def retrieve(query, top_k=2):
     # Vector search
     embedding = EMBED_MODEL.encode([query]).tolist()
     results = collection.query(query_embeddings=embedding, n_results=10)
@@ -76,7 +76,7 @@ def main():
 
         print("Searching documentation...")
         chunks = retrieve(question)
-        context = "\n\n".join(chunks)
+        context = "\n\n".join(chunks)[:1000]
 
         print("Generating answer...")
         answer = ask_groq(question, context)
