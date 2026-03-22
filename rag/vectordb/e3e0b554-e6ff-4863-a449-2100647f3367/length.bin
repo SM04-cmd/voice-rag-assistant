@@ -1,1 +1,29 @@
-invalid type: string "Python Types Intro\n¶\nPython has support for optional \"type hints\" (also called \"type annotations\").\nThese\n\"type hints\"\nor annotations are a special syntax that allow declaring the\ntype\nof a variable.\nBy declaring types for your variables, editors and tools can give you better support.\nThis is just a\nquick tutorial / refresher\nastAPI\nuygulamasını algılar 
+.
+The
+path
+/items/{item_id}
+has an optional
+str
+query parameter
+q
+.
+Interactive API docs
+¶
+Now go to
+http://127.0.0.1:8000/docs
+.
+You will see the automatic interactive API documentation (provided by
+Swagger UI
+):
+Alternative API docs
+¶
+And now, go to
+http://127.0.0.1:8000/redoc
+.
+You will see the alternative automatic documentation (provided by
+ReDoc
+):
+Example upgrade
+¶
+Now modify the file
+ma

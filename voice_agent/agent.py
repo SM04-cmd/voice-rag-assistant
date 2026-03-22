@@ -1,20 +1,23 @@
-# voice_agent/agent.py
-import asyncio
+import sys
+sys.path.append(".")
+
 import os
 import pickle
 import chromadb
+import numpy as np
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
-from rank_bm25 import BM25Okapi
-import numpy as np
-from groq import Groq
+
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, Agent, AgentSession
+from livekit.plugins import groq as livekit_groq
+from livekit.plugins import silero
 
 load_dotenv()
 
+# Load models
 EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# Load Chroma
+# Load ChromaDB
 chroma_client = chromadb.PersistentClient(path="./rag/vectordb")
 collection = chroma_client.get_collection("fastapi_docs")
 
@@ -23,65 +26,62 @@ with open("rag/bm25_index.pkl", "rb") as f:
     bm25_data = pickle.load(f)
 
 def retrieve(query, top_k=2):
-    # Vector search
     embedding = EMBED_MODEL.encode([query]).tolist()
-    results = collection.query(query_embeddings=embedding, n_results=10)
+    results = collection.query(query_embeddings=embedding, n_results=5)
     vector_chunks = results["documents"][0]
 
-    # BM25 search
     tokens = query.lower().split()
     scores = bm25_data["bm25"].get_scores(tokens)
-    top_indices = np.argsort(scores)[::-1][:10]
+    top_indices = np.argsort(scores)[::-1][:5]
     bm25_chunks = [bm25_data["chunks"][i] for i in top_indices if scores[i] > 0]
 
-    # Combine and deduplicate
     seen = set()
     combined = []
     for chunk in vector_chunks + bm25_chunks:
         if chunk not in seen:
             seen.add(chunk)
             combined.append(chunk)
-
     return combined[:top_k]
 
-def ask_groq(question, context):
-    prompt = f"""You are a helpful voice assistant that answers questions about FastAPI documentation.
-Answer in simple, clear spoken language. Keep it under 3 sentences.
 
-Context from documentation:
-{context}
+class VoxDocsAgent(Agent):
+    def __init__(self):
+        # Build system prompt with RAG context injected at runtime
+        super().__init__(
+            instructions="""You are VoxDocs, a helpful voice assistant for documentation.
+Answer questions clearly and concisely based on the provided documentation context.
+Keep responses short and conversational since you are speaking out loud."""
+        )
 
-Question: {question}
-Answer:"""
+    async def on_user_turn_completed(self, turn_ctx, new_message):
+        # Inject RAG context into every user message
+        user_text = new_message.text_content
+        chunks = retrieve(user_text, top_k=2)
+        context = "\n\n".join(chunks)
 
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=300
+        new_message.content = (
+            f"Documentation context:\n{context}\n\n"
+            f"User question: {user_text}"
+        )
+        await super().on_user_turn_completed(turn_ctx, new_message)
+
+
+async def entrypoint(ctx: JobContext):
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    session = AgentSession(
+        stt=livekit_groq.STT(model="whisper-large-v3"),        # Speech-to-text
+        llm=livekit_groq.LLM(model="llama-3.3-70b-versatile"), # LLM
+        tts=livekit_groq.TTS(model="playai-tts",               # ✅ Groq TTS
+                              voice="Celeste-PlayAI"),
+        vad=silero.VAD.load(),                                  # Voice activity detection
     )
-    return response.choices[0].message.content
 
-def main():
-    print("🎙️ Voice RAG Assistant Ready!")
-    print("Type your question (or 'quit' to exit):")
-    print("-" * 40)
+    await session.start(
+        agent=VoxDocsAgent(),
+        room=ctx.room,
+    )
 
-    while True:
-        question = input("\nYou: ").strip()
-        if question.lower() in ["quit", "exit", "q"]:
-            print("Goodbye!")
-            break
-        if not question:
-            continue
-
-        print("Searching documentation...")
-        chunks = retrieve(question)
-        context = "\n\n".join(chunks)[:1000]
-
-        print("Generating answer...")
-        answer = ask_groq(question, context)
-
-        print(f"\nAssistant: {answer}")
 
 if __name__ == "__main__":
-    main()
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
